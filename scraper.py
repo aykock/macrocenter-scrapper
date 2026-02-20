@@ -4,6 +4,7 @@ import re
 import time
 import json
 import os
+import pandas as pd
 from datetime import datetime
 from dotenv import load_dotenv
 from supabase import create_client, Client
@@ -133,12 +134,26 @@ if __name__ == "__main__":
         
     print(f"\nToplam {len(all_products)} ürün çekildi.")
     if all_products:
+        print("CSV dosyası oluşturuluyor...")
+        try:
+            os.makedirs("data", exist_ok=True)
+            today_str = datetime.now().strftime("%Y-%m-%d")
+            csv_path = f"data/ideal_prices_{today_str}.csv"
+            df = pd.DataFrame(all_products)
+            df.to_csv(csv_path, index=False, encoding="utf-8-sig")
+            print(f"Veriler başarıyla {csv_path} dosyasına kaydedildi.")
+        except Exception as e:
+            print(f"CSV kaydedilirken hata oluştu: {e}")
+
         print("Supabase'e aktarılıyor...")
         try:
+            # Sadece isim ve fiyat bilgilerini Supabase'e gönderiyoruz
+            supabase_payload = [{"name": p["name"], "price": p["price"]} for p in all_products]
+
             # Chunking list to avoid payload size limit issues
             chunk_size = 500
-            for i in range(0, len(all_products), chunk_size):
-                chunk = all_products[i:i + chunk_size]
+            for i in range(0, len(supabase_payload), chunk_size):
+                chunk = supabase_payload[i:i + chunk_size]
                 response = supabase.table("products_price_history").insert(chunk).execute()
                 print(f"Başarıyla {len(chunk)} ürün veritabanına eklendi.")
         except Exception as e:
