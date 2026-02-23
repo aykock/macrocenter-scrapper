@@ -1,15 +1,48 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
+  <component name="AutoImportSettings">
+    <option name="autoReloadType" value="SELECTIVE" />
+  </component>
   <component name="ChangeListManager">
-    <list default="true" id="c8685e53-b9c5-4fe2-beb0-c4d3bafe3df9" name="Changes" comment="" />
+    <list default="true" id="c8685e53-b9c5-4fe2-beb0-c4d3bafe3df9" name="Changes" comment="">
+      <change afterPath="$PROJECT_DIR$/Codes/Markets/BIM/BIMDailyData-23.02.2026.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/Datas/Markets/BIM/BımDataScratch.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/InflationResearchStudy.iml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/InflationResearchStudy.iml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+    </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
     <option name="LAST_RESOLUTION" value="IGNORE" />
   </component>
+  <component name="FileTemplateManagerImpl">
+    <option name="RECENT_TEMPLATES">
+      <list>
+        <option value="Python Script" />
+      </list>
+    </option>
+  </component>
   <component name="Git.Settings">
+    <option name="PUSH_TAGS">
+      <GitPushTagMode>
+        <option name="argument" value="--tags" />
+        <option name="title" value="All" />
+      </GitPushTagMode>
+    </option>
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
   </component>
+  <component name="GitHubPullRequestSearchHistory"><![CDATA[{
+  "lastFilter": {
+    "state": "OPEN",
+    "assignee": "urazkagangunes"
+  }
+}]]></component>
+  <component name="GithubPullRequestsUISettings"><![CDATA[{
+  "selectedUrlAndAccountId": {
+    "url": "https://github.com/urazkagangunes/InflationResearchStudy.git",
+    "accountId": "4022ce06-3203-47a2-a268-a481f0e37e62"
+  }
+}]]></component>
   <component name="ProjectColorInfo"><![CDATA[{
   "associatedIndex": 2
 }]]></component>

@@ -1,0 +1,1 @@
+#Datalarınızı günlük kendi market klasörünüzü oluşturup içine yüklenyiniz.
