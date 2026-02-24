@@ -32,9 +32,15 @@ def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     filename = f"hapeloglu_{timestamp.strftime('%Y-%m-%d')}.csv"
     filepath = os.path.join(OUTPUT_DIR, filename)
+    # Save CSV
     df.to_csv(filepath, index=False, encoding="utf-8-sig")
 
+    # Save TSV
+    tsv_filepath = filepath.replace(".csv", ".tsv")
+    df.to_csv(tsv_filepath, index=False, encoding="utf-8-sig", sep="\t")
+
     print(f"\nDone! {len(df)} products -> {filepath}")
+    print(f"TSV copy -> {tsv_filepath}")
 
 
 if __name__ == "__main__":
