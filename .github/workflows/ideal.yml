@@ -32,7 +32,7 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: |
-          python Codes/Markets/Ideal/scraper.py
+          python Codes/Markets/Ideal/ideal_scraper.py
 
       - name: Commit and push CSV files
         run: |
