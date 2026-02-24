@@ -2,11 +2,19 @@
 Configuration - all constants in one place.
 """
 
+import os
+
 BASE_URL = "https://www.hapeloglu.com"
 PRODUCTS_PER_PAGE = 80
 REQUEST_DELAY = 1.5       # seconds between requests
 MAX_RETRIES = 3
-OUTPUT_DIR = "data/raw"
+
+# Resolve path relative to this file's location:
+# config.py is at:  Codes/Markets/Hapeloglu/src/config.py
+# Target is:        Datas/Markets/Hapeloglu/
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+_REPO_ROOT = os.path.join(_THIS_DIR, "..", "..", "..", "..")
+OUTPUT_DIR = os.path.normpath(os.path.join(_REPO_ROOT, "Datas", "Markets", "Hapeloglu"))
 
 # 13 main categories (depth=1 from sidebar)
 CATEGORIES = {
