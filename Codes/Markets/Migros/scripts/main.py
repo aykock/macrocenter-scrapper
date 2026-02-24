@@ -1,0 +1,335 @@
+"""
+main.py — Migros Türkiye Product Scraper
+=========================================
+
+Usage examples:
+  # List all available categories
+  python main.py --list-categories
+
+  # Scrape a single category (by ID) and save as CSV
+  python main.py --category 2 --output csv
+
+  # Scrape all categories, save both CSV and JSON, with a 1-second delay
+  python main.py --output both --delay 1.0
+
+  # Limit pages per category (useful for quick testing)
+  python main.py --category 2 --output both --limit 2
+
+  # Resume an interrupted run (skips already-done categories)
+  python main.py --output csv --resume
+"""
+
+import argparse
+import json
+import logging
+import os
+import sys
+import time
+from pathlib import Path
+
+import pandas as pd
+import requests
+from tqdm import tqdm
+
+import config
+from category_fetcher import fetch_categories
+from product_fetcher import fetch_products_for_category
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%H:%M:%S",
+)
+logger = logging.getLogger(__name__)
+
+
+# ── Checkpoint helpers ───────────────────────────────────────────────────────
+
+def _load_checkpoint() -> dict:
+    if os.path.exists(config.CHECKPOINT_FILE):
+        with open(config.CHECKPOINT_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {"done": []}
+
+
+def _save_checkpoint(checkpoint: dict) -> None:
+    os.makedirs(config.CHECKPOINT_DIR, exist_ok=True)
+    with open(config.CHECKPOINT_FILE, "w", encoding="utf-8") as f:
+        json.dump(checkpoint, f, ensure_ascii=False, indent=2)
+
+
+# ── Output helpers ───────────────────────────────────────────────────────────
+
+def _append_products(new_products: list[dict], output_format: str) -> None:
+    """
+    Append new products to the output files incrementally.
+    Called after every category so data is never lost on interruption.
+    """
+    if not new_products:
+        return
+
+    os.makedirs(config.OUTPUT_DIR, exist_ok=True)
+    df_new = pd.DataFrame(new_products)
+
+    if output_format in ("csv", "both"):
+        write_header = not os.path.exists(config.CSV_OUTPUT_FILE)
+        df_new.to_csv(
+            config.CSV_OUTPUT_FILE,
+            mode="a",
+            index=False,
+            header=write_header,
+            encoding="utf-8-sig",
+        )
+
+    if output_format in ("json", "both"):
+        # Rewrite the whole JSON each time (needed for valid JSON array)
+        existing: list[dict] = []
+        if os.path.exists(config.JSON_OUTPUT_FILE):
+            try:
+                with open(config.JSON_OUTPUT_FILE, "r", encoding="utf-8") as f:
+                    existing = json.load(f)
+            except Exception:
+                existing = []
+        existing.extend(new_products)
+        with open(config.JSON_OUTPUT_FILE, "w", encoding="utf-8") as f:
+            json.dump(existing, f, ensure_ascii=False, indent=2)
+
+
+def _dedup_csv() -> int:
+    """Remove duplicate product IDs from the CSV file. Returns final row count."""
+    if not os.path.exists(config.CSV_OUTPUT_FILE):
+        return 0
+    df = pd.read_csv(config.CSV_OUTPUT_FILE, encoding="utf-8-sig")
+    before = len(df)
+    df.drop_duplicates(subset=["id"], inplace=True)
+    df.reset_index(drop=True, inplace=True)
+    df.to_csv(config.CSV_OUTPUT_FILE, index=False, encoding="utf-8-sig")
+    if len(df) < before:
+        logger.info("Removed %d duplicate rows. Final count: %d", before - len(df), len(df))
+    return len(df)
+
+
+def _dedup_json() -> None:
+    """Remove duplicate product IDs from the JSON file."""
+    if not os.path.exists(config.JSON_OUTPUT_FILE):
+        return
+    with open(config.JSON_OUTPUT_FILE, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    seen: set[str] = set()
+    deduped = []
+    for item in data:
+        pid = str(item.get("id", ""))
+        if pid not in seen:
+            seen.add(pid)
+            deduped.append(item)
+    with open(config.JSON_OUTPUT_FILE, "w", encoding="utf-8") as f:
+        json.dump(deduped, f, ensure_ascii=False, indent=2)
+
+
+# ── Core scraping logic ──────────────────────────────────────────────────────
+
+def _make_session() -> requests.Session:
+    session = requests.Session()
+    session.headers.update(config.DEFAULT_HEADERS)
+    return session
+
+
+def run_scraper(args: argparse.Namespace) -> None:
+    session = _make_session()
+
+    # 1. Fetch categories
+    logger.info("Fetching category list…")
+    try:
+        categories = fetch_categories(session=session)
+    except RuntimeError as exc:
+        logger.error("Could not fetch categories: %s", exc)
+        sys.exit(1)
+
+    if not categories:
+        logger.error("No categories found. Exiting.")
+        sys.exit(1)
+
+    # 2. Filter to a single category if requested
+    if args.category:
+        categories = [c for c in categories if c["id"] == args.category]
+        if not categories:
+            logger.error(
+                "Category ID '%s' not found in sitemap. "
+                "Use --list-categories to see available IDs.",
+                args.category,
+            )
+            sys.exit(1)
+
+    # 3. Load checkpoint for resume support
+    checkpoint = _load_checkpoint() if args.resume else {"done": []}
+
+    # 4. On a fresh (non-resume) run, clear any old output files
+    if not args.resume:
+        for fpath in [config.CSV_OUTPUT_FILE, config.JSON_OUTPUT_FILE]:
+            if os.path.exists(fpath):
+                os.remove(fpath)
+                logger.info("Cleared old output file: %s", fpath)
+
+    categories_to_scrape = [
+        c for c in categories if c["id"] not in checkpoint["done"]
+    ]
+
+    if not categories_to_scrape:
+        logger.info("All categories already scraped. Run without --resume to start fresh.")
+        return
+
+    total_products = 0
+
+    # Count products already in CSV (when resuming)
+    if args.resume and os.path.exists(config.CSV_OUTPUT_FILE):
+        try:
+            existing_df = pd.read_csv(config.CSV_OUTPUT_FILE, encoding="utf-8-sig")
+            total_products = len(existing_df)
+            logger.info(
+                "Resuming: %d existing products already saved in %s",
+                total_products, config.CSV_OUTPUT_FILE,
+            )
+        except Exception as exc:
+            logger.warning("Could not count existing products: %s", exc)
+
+    logger.info(
+        "Scraping %d categor%s…",
+        len(categories_to_scrape),
+        "y" if len(categories_to_scrape) == 1 else "ies",
+    )
+
+    with tqdm(categories_to_scrape, unit="category", desc="Categories") as pbar:
+        for cat in pbar:
+            pbar.set_postfix_str(cat["name"])
+
+            cat_products = _scrape_category(
+                session=session,
+                category=cat,
+                delay=args.delay,
+                page_limit=args.limit,
+            )
+
+            # ✅ Save immediately after each category — no data lost on interruption
+            if cat_products:
+                _append_products(cat_products, args.output)
+                total_products += len(cat_products)
+
+            checkpoint["done"].append(cat["id"])
+            _save_checkpoint(checkpoint)
+
+            if cat_products:
+                logger.info(
+                    "Category '%s': +%d products (total so far: %d)",
+                    cat["name"], len(cat_products), total_products,
+                )
+
+    # 5. Final deduplication pass
+    logger.info("Running final deduplication…")
+    final_count = _dedup_csv()
+    if args.output in ("json", "both"):
+        _dedup_json()
+
+    logger.info("Done! ✓  Total unique products: %d", final_count)
+    logger.info("Output → %s", config.CSV_OUTPUT_FILE)
+    if args.output in ("json", "both"):
+        logger.info("Output → %s", config.JSON_OUTPUT_FILE)
+
+
+def _scrape_category(
+    session: requests.Session,
+    category: dict,
+    delay: float,
+    page_limit: int,
+) -> list[dict]:
+    """
+    Scrape all (or up to page_limit) pages of a category dict.
+    page_limit=0 means unlimited.
+    """
+    return fetch_products_for_category(
+        category=category,
+        session=session,
+        delay=delay,
+        page_limit=page_limit,
+    )
+
+
+# ── CLI ──────────────────────────────────────────────────────────────────────
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="migros-scraper",
+        description="Scrape all product data from Migros Türkiye (migros.com.tr).",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__,
+    )
+    parser.add_argument(
+        "--list-categories",
+        action="store_true",
+        help="Print all available categories and exit.",
+    )
+    parser.add_argument(
+        "--category",
+        metavar="ID",
+        default=None,
+        help="Scrape only this category ID (e.g. '2'). Omit to scrape all categories.",
+    )
+    parser.add_argument(
+        "--output",
+        choices=["csv", "json", "both"],
+        default="both",
+        help="Output format (default: both).",
+    )
+    parser.add_argument(
+        "--delay",
+        type=float,
+        default=config.REQUEST_DELAY,
+        metavar="SECONDS",
+        help=f"Delay between page requests in seconds (default: {config.REQUEST_DELAY}).",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=0,
+        metavar="PAGES",
+        help="Maximum pages to scrape per category (0 = unlimited, useful for testing).",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Skip categories already listed in the checkpoint file.",
+    )
+    parser.add_argument(
+        "-v", "--verbose",
+        action="store_true",
+        help="Enable debug-level logging.",
+    )
+    return parser
+
+
+def main() -> None:
+    parser = _build_parser()
+    args = parser.parse_args()
+
+    if args.verbose:
+        logging.getLogger().setLevel(logging.DEBUG)
+
+    if args.list_categories:
+        session = _make_session()
+        try:
+            categories = fetch_categories(session=session)
+        except RuntimeError as exc:
+            logger.error(str(exc))
+            sys.exit(1)
+
+        print(f"\n{'ID':<12} {'Name'}")
+        print("-" * 50)
+        for cat in categories:
+            print(f"{cat['id']:<12} {cat['name']}")
+        print(f"\nTotal: {len(categories)} categories")
+        return
+
+    run_scraper(args)
+
+
+if __name__ == "__main__":
+    main()
