@@ -121,8 +121,10 @@ def scrape_entire_market():
         df.drop_duplicates(subset=['name'], keep='first', inplace=True)
 
         today_date = datetime.now().strftime("%Y-%m-%d")
-        os.makedirs("data", exist_ok=True)
-        filename = f"data/mopas_prices_{today_date}.csv"
+
+        # Tell Python to use the team's Datas folder
+        os.makedirs("Datas/Markets", exist_ok=True)
+        filename = f"Datas/Markets/mopas_prices_{today_date}.csv"
 
         df.to_csv(filename, index=False, encoding='utf-8-sig')
 

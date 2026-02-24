@@ -27,17 +27,16 @@ jobs:
       run: |
         pip install requests beautifulsoup4 pandas
 
-    # 4. Changes into your specific directory and runs your script
+    # 4. Runs your script from the root folder pointing to the new Codes location
     - name: Run Python script
-      working-directory: ./mopas_CanCetin
-      run: python mopas_scraper.py
+      run: python Codes/Markets/mopas_scraper.py
 
-    # 5. Uploads the CSV file as a downloadable zip (Artifact)
+    # 5. Uploads the CSV file as a downloadable zip from the new Datas location
     - name: Upload CSV as Artifact
       uses: actions/upload-artifact@v4
       with:
         name: mopas-daily-data
-        path: mopas_CanCetin/data/*.csv
+        path: Datas/Markets/*.csv
 
     # 6. (TEMPORARILY DISABLED) Saves the newly generated CSV file back to the repository
     # Disabled to prevent the Error 403 Permission Denied until repository settings are updated
