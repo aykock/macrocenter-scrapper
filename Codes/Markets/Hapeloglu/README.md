@@ -1,4 +1,4 @@
-# Hapeloğlu Price Tracker
+# Hapeloğlu Price Tracker | Successfully Vibecoded by Batu Koray (Even the README.md)
 
 **AI201 - Intro to Data Science** | Spring 2026 | Özyeğin University
 
