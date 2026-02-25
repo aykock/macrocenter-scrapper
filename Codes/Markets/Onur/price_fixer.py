@@ -5,7 +5,38 @@ from typing import Optional
 
 
 DATA_DIR = r"C:\Users\EXCALIBUR\OneDrive\Masaüstü\AI201\InflationResearchStudy\Datas\Markets\Onur"
-#change price to float from string
+#change price to float from string, ı dont need it from now on.
+
+def _normalize_numeric_string(text: str) -> Optional[str]:
+    match = re.search(r"[-+]?\d[\d\.,]*", text)
+    if not match:
+        return None
+    number = match.group(0)
+    if "," in number and "." in number:
+        # Turkish format: thousands "." and decimal ","
+        number = number.replace(".", "").replace(",", ".")
+    elif "," in number:
+        number = number.replace(".", "").replace(",", ".")
+    elif "." in number:
+        # If the last segment is 1-2 digits, treat "." as decimal separator.
+        last = number.split(".")[-1]
+        if len(last) in (1, 2):
+            number = number.replace(",", "")
+        else:
+            number = number.replace(".", "")
+    return number
+
+
+def _fix_inflated_price(value: float, raw_text: str) -> float:
+    # If a price looks inflated by 100 (e.g., "10990.0" instead of "109.90"),
+    # normalize it for grocery-scale prices.
+    if value >= 1000 and value.is_integer():
+        # Only apply when the raw text doesn't already show explicit decimals.
+        has_explicit_decimal = bool(re.search(r"[.,]\d{1,2}\b", raw_text))
+        if not has_explicit_decimal and (value / 100) < 1000:
+            return value / 100
+    return value
+
 
 def parse_price_to_float(value: str) -> Optional[float]:
     if value is None:
@@ -13,15 +44,14 @@ def parse_price_to_float(value: str) -> Optional[float]:
     text = str(value).strip()
     if not text:
         return None
-    match = re.search(r"[\d\.,]+", text)
-    if not match:
+    normalized = _normalize_numeric_string(text.lower().replace("₺", "").replace("tl", ""))
+    if not normalized:
         return None
-    number = match.group(0)
-    number = number.replace(".", "").replace(",", ".")
     try:
-        return float(number)
+        parsed = float(normalized)
     except ValueError:
         return None
+    return _fix_inflated_price(parsed, text)
 
 
 def fix_file(path: str) -> int:
