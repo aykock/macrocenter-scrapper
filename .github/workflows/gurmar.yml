@@ -1,33 +1,40 @@
-name: Gurmar Günlük Fiyat Çekici
+name: Daily Market Scrape
 
 on:
   schedule:
-    - cron: '0 5 * * *'   # Her gün 05:00 UTC = 08:00 Türkiye
-  workflow_dispatch:        
+    # This runs at 00:00 UTC (03:00 Turkish Time) every day
+    - cron: '0 0 * * *'
+  workflow_dispatch:
 
 jobs:
-  scrape:
+  scrape_and_upload:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
-      - name: Repoyu indir
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Python kur
-        uses: actions/setup-python@v5
+      - name: Set up Python
+        uses: actions/setup-python@v4
         with:
-          python-version: '3.11'
+          python-version: '3.10'
+          cache: 'pip'
 
-      - name: Kütüphaneleri yükle
-        run: pip install requests beautifulsoup4
-
-      - name: Scripti çalıştır
-        run: python Codes/Markets/Gurmar/scraper.py
-
-      - name: CSV'yi repoya kaydet
+      - name: Install dependencies
         run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Datas/Markets/Gurmar/
-          git diff --staged --quiet || git commit -m "🛒 Gurmar fiyat güncellemesi: $(date +'%Y-%m-%d')"
-          git push
+          python -m pip install --upgrade pip
+          pip install selenium 
+
+      - name: Run scraper
+        run: |
+          python Codes/Markets/Gurmar/gurmar_scraper.py
+
+      - name: Commit and Push changes
+        run: |
+          git config --global user.name "GitHub Action"
+          git config --global user.email "action@github.com"          
+          git add Datas/Markets/Gurmar/*.csv
+          git commit -m "Auto-update: Added daily gurmar product data for $(date +'%Y-%m-%d')" || exit 0
+          git push origin HEAD:${{ github.ref_name }}
