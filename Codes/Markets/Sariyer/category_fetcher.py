@@ -1,25 +1,7 @@
 """
-Category fetcher — Sarıyer Market
-==================================
-
-İki aşamalı strateji:
-
-1. **API tabanlı (tercih edilen):**
-   ``GET /api/categories`` endpoint'i JSON dönüyorsa oradan alır.
-
-2. **HTML tabanlı (fallback):**
-   API yoksa veya 403/404 dönüyorsa, ana kategori sayfasının HTML'ini
-   parse ederek kategori linklerini çıkarır.
-
-Her iki yöntemde de dönen format aynıdır:
-    {
-        "id":           "meyve-sebze",   # slug veya sayısal ID
-        "name":         "Meyve & Sebze",
-        "url":          "https://www.sariyermarket.com/meyve-sebze",
-        "parent_id":    None,            # alt kategori ise dolu
-        "parent_name":  None,
-        "product_count": 120,            # API bilinmiyorsa None
-    }
+Product fetcher — Sarıyer Market
+Kategori sayfalarını HTML olarak scrape eder.
+NopCommerce tabanlı site — sayfalama: ?pagenumber=N
 """
 
 import re
@@ -42,218 +24,146 @@ def _make_session() -> requests.Session:
     return session
 
 
-# ── Strateji 1: API tabanlı ──────────────────────────────────────────────────
-
-def _fetch_categories_from_api(session: requests.Session) -> list[dict]:
-    """
-    JSON API'den kategori ağacını çeker.
-    API aşağıdaki formatlardan birini dönebilir:
-      - Düz liste:  [{id, name, slug, parentId, productCount}, ...]
-      - İç içe ağaç: [{id, name, children: [...]}]
-    Her iki formatta da düz listeye dönüştürür.
-    """
-    for attempt in range(1, config.MAX_RETRIES + 1):
-        try:
-            resp = session.get(config.CATEGORY_API_URL, timeout=20)
-            if resp.status_code in (403, 404):
-                logger.info(
-                    "Kategori API'si %d döndü — HTML stratejisine geçiliyor.",
-                    resp.status_code,
-                )
-                return []
-            resp.raise_for_status()
-            data = resp.json()
-            break
-        except requests.RequestException as exc:
-            if attempt == config.MAX_RETRIES:
-                logger.warning("Kategori API'si erişilemez: %s", exc)
-                return []
-            time.sleep(config.RETRY_BACKOFF * attempt)
-    else:
-        return []
-
-    # API yanıtı doğrudan liste mi yoksa bir anahtar altında mı?
-    if isinstance(data, list):
-        raw_list = data
-    elif isinstance(data, dict):
-        # {"categories": [...]} veya {"data": [...]} gibi sarmalama
-        raw_list = (
-            data.get("categories")
-            or data.get("data")
-            or data.get("items")
-            or []
-        )
-    else:
-        return []
-
-    return _flatten_category_tree(raw_list, parent_id=None, parent_name=None)
-
-
-def _flatten_category_tree(
-    nodes: list,
-    parent_id: Optional[str],
-    parent_name: Optional[str],
-) -> list[dict]:
-    """Recursive: iç içe kategori ağacını düz listeye çevirir."""
-    result = []
-    for node in nodes:
-        if not isinstance(node, dict):
-            continue
-
-        cat_id   = str(node.get("id") or node.get("slug") or "")
-        cat_name = node.get("name") or node.get("label") or cat_id
-        cat_slug = node.get("slug") or node.get("url") or cat_id
-        count    = node.get("productCount") or node.get("count") or node.get("product_count")
-
-        # URL oluştur
-        if cat_slug.startswith("http"):
-            cat_url = cat_slug
+def _price(text: str) -> float:
+    if not text:
+        return 0.0
+    clean = re.sub(r"[^\d,\.]", "", text)
+    if "," in clean and "." in clean:
+        if clean.rfind(",") > clean.rfind("."):
+            clean = clean.replace(".", "").replace(",", ".")
         else:
-            cat_url = f"{config.BASE_URL}/{cat_slug.lstrip('/')}"
-
-        if cat_id:
-            result.append({
-                "id":            cat_id,
-                "name":          cat_name,
-                "url":           cat_url,
-                "parent_id":     parent_id,
-                "parent_name":   parent_name,
-                "product_count": count,
-            })
-
-        # Alt kategorileri recursive işle
-        children = node.get("children") or node.get("subCategories") or []
-        if children:
-            result.extend(
-                _flatten_category_tree(children, cat_id, cat_name)
-            )
-
-    return result
+            clean = clean.replace(",", "")
+    elif "," in clean:
+        clean = clean.replace(",", ".")
+    try:
+        return round(float(clean), 2)
+    except:
+        return 0.0
 
 
-# ── Strateji 2: HTML tabanlı ─────────────────────────────────────────────────
+def _parse_product(card, category: dict) -> Optional[dict]:
+    # Ürün adı
+    name_tag = card.select_one(".product-title a, .product-name a, h2 a, h3 a, .name a")
+    if not name_tag:
+        name_tag = card.select_one(".product-title, .product-name, h2, h3")
+    name = name_tag.get_text(strip=True) if name_tag else ""
+    if not name:
+        return None
 
-def _fetch_categories_from_html(session: requests.Session) -> list[dict]:
-    """
-    Siteyi tarayıcı gibi ziyaret edip HTML'den kategori linklerini çıkarır.
-    """
-    for attempt in range(1, config.MAX_RETRIES + 1):
-        try:
-            resp = session.get(
-                config.CATEGORY_HTML_URL,
-                headers=config.HTML_HEADERS,
-                timeout=30,
-            )
-            resp.raise_for_status()
-            break
-        except requests.RequestException as exc:
-            if attempt == config.MAX_RETRIES:
-                logger.error("HTML kategori sayfası alınamadı: %s", exc)
-                return []
-            time.sleep(config.RETRY_BACKOFF * attempt)
-    else:
-        return []
+    # Fiyatlar — NopCommerce genelde .price-value veya .actual-price kullanır
+    shown_tag   = card.select_one(".price-value, .actual-price, .price .current, .new-price, span.price")
+    regular_tag = card.select_one(".old-price, .non-discounted-price, s.price, .price-old")
 
-    soup = BeautifulSoup(resp.text, "lxml")
+    shown_price   = _price(shown_tag.get_text(strip=True)   if shown_tag   else "")
+    regular_price = _price(regular_tag.get_text(strip=True) if regular_tag else "")
 
-    # Önce CSS seçiciyle dene
-    links = soup.select(config.CSS["category_links"])
+    if regular_price == 0:
+        regular_price = shown_price
 
-    # Bulamazsa daha genel arama yap
-    if not links:
-        links = [
-            a for a in soup.find_all("a", href=True)
-            if _looks_like_category_url(a["href"])
-        ]
+    discount = 0
+    if regular_price and shown_price and regular_price > shown_price:
+        discount = int(round((regular_price - shown_price) / regular_price * 100))
 
-    seen: set[str] = set()
-    categories = []
+    # Görsel
+    img_tag = card.select_one("img.product-image, .product-img img, img")
+    image_url = ""
+    if img_tag:
+        image_url = img_tag.get("data-src") or img_tag.get("src") or ""
+        if image_url and not image_url.startswith("http"):
+            image_url = urljoin(config.BASE_URL, image_url)
 
-    for a in links:
-        href = a.get("href", "")
-        url  = urljoin(config.BASE_URL, href)
-        name = a.get_text(strip=True)
+    # Ürün URL
+    link_tag = card.select_one("a.product-title, h2 a, h3 a, .product-name a, a")
+    product_url = ""
+    if link_tag:
+        href = link_tag.get("href", "")
+        product_url = urljoin(config.BASE_URL, href) if href else ""
 
-        if not name or url in seen:
-            continue
-        seen.add(url)
+    # ID
+    product_id = (
+        card.get("data-productid") or card.get("data-id") or card.get("id") or ""
+    )
+    if not product_id and product_url:
+        product_id = product_url.rstrip("/").split("/")[-1]
 
-        # URL'den slug çıkar (son path segmenti)
-        slug = url.rstrip("/").split("/")[-1]
-        if not slug or slug in ("urunler", "products", "kategori", "category"):
-            continue
-
-        categories.append({
-            "id":            slug,
-            "name":          name or slug,
-            "url":           url,
-            "parent_id":     None,
-            "parent_name":   None,
-            "product_count": None,
-        })
-
-    logger.info("HTML'den %d kategori bulundu.", len(categories))
-    return categories
-
-
-def _looks_like_category_url(href: str) -> bool:
-    """URL bir ürün kategorisi linkine benziyorsa True döner."""
-    skip = {"#", "javascript", "mailto", "tel:", "http://", "https://"}
-    if any(href.startswith(s) for s in skip):
-        return False
-    # Dış link değil ve sadece rakam/ID değil
-    if href.startswith("http") and config.BASE_URL not in href:
-        return False
-    skip_segments = {
-        "giris", "kayit", "sepet", "hesabim", "siparis",
-        "iletisim", "hakkimizda", "login", "register", "cart",
-        "account", "checkout", "search", "arama",
+    return {
+        "id":            str(product_id),
+        "sku":           str(product_id),
+        "name":          name,
+        "brand":         card.get("data-brand", ""),
+        "category":      category.get("name", ""),
+        "category_id":   category.get("id", ""),
+        "regular_price": regular_price,
+        "shown_price":   shown_price,
+        "discount_rate": discount,
+        "unit":          "",
+        "status":        "OUT_OF_STOCK" if card.select_one(".out-of-stock") else "IN_STOCK",
+        "image_url":     image_url,
+        "product_url":   product_url,
     }
-    parts = href.strip("/").split("/")
-    return bool(parts) and parts[-1].lower() not in skip_segments
 
 
-# ── Genel arayüz ─────────────────────────────────────────────────────────────
+def fetch_products_for_category(
+    category: dict,
+    session: Optional[requests.Session] = None,
+    delay: float = config.REQUEST_DELAY,
+    page_limit: int = 0,
+) -> list[dict]:
 
-def fetch_categories(session: Optional[requests.Session] = None) -> list[dict]:
-    """
-    Sarıyer Market'in tüm (alt-)kategorilerini döndürür.
-
-    Önce JSON API'yi dener; başarısız olursa HTML'den parse eder.
-
-    Her eleman:
-        {
-            "id":            str,   # slug veya sayısal ID
-            "name":          str,
-            "url":           str,   # tam URL (ürün listesi)
-            "parent_id":     str | None,
-            "parent_name":   str | None,
-            "product_count": int | None,
-        }
-    """
     if session is None:
         session = _make_session()
 
-    logger.info("Kategori listesi alınıyor (API deneniyor)…")
-    categories = _fetch_categories_from_api(session)
+    all_products: list[dict] = []
+    page = 1
+    base_url = category["url"]
 
-    if not categories:
-        logger.info("API çalışmıyor — HTML'den kategori çekiliyor…")
-        categories = _fetch_categories_from_html(session)
+    while True:
+        if page_limit and page > page_limit:
+            break
 
-    if not categories:
-        raise RuntimeError(
-            "Hiçbir kategori bulunamadı. "
-            "CSS seçicilerini veya config.CATEGORY_API_URL'yi kontrol edin."
+        url = base_url + ("&" if "?" in base_url else "?") + f"pagenumber={page}"
+
+        for attempt in range(1, config.MAX_RETRIES + 1):
+            try:
+                resp = session.get(url, timeout=30)
+                resp.raise_for_status()
+                break
+            except requests.RequestException as exc:
+                if attempt == config.MAX_RETRIES:
+                    logger.error("Sayfa alınamadı '%s' sayfa %d: %s", category["name"], page, exc)
+                    return all_products
+                time.sleep(config.RETRY_BACKOFF * attempt)
+
+        soup = BeautifulSoup(resp.text, "lxml")
+
+        # NopCommerce ürün kartları
+        cards = soup.select(
+            ".product-item, .item-box, article.product-item, "
+            ".product-grid .item, .product-box"
         )
 
-    # Yinelenen ID'leri temizle
-    seen: set[str] = set()
-    unique = []
-    for cat in categories:
-        if cat["id"] not in seen:
-            unique.append(cat)
-            seen.add(cat["id"])
+        if not cards:
+            logger.debug("Kategori '%s' sayfa %d'de ürün yok — durdu.", category["name"], page)
+            break
 
-    logger.info("Toplam çekilebilir kategori: %d", len(unique))
-    return unique
+        page_products = []
+        for card in cards:
+            record = _parse_product(card, category)
+            if record:
+                page_products.append(record)
+
+        all_products.extend(page_products)
+        logger.debug(
+            "Kategori '%s' — sayfa %d → %d ürün (toplam: %d)",
+            category["name"], page, len(page_products), len(all_products),
+        )
+
+        # Sonraki sayfa var mı?
+        next_page = soup.select_one("a.next-page, li.next-page a, .pager .next a, a[rel='next']")
+        if not next_page:
+            break
+
+        page += 1
+        time.sleep(delay)
+
+    return all_products
