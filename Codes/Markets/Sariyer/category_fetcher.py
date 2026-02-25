@@ -1,8 +1,10 @@
 """
-Category fetcher — Sarıyer Market
-Ana sayfanın header menüsünden slug tabanlı kategori URL'leri çeker.
+Product fetcher — Sarıyer Market
+Kategori sayfalarını HTML olarak scrape eder.
+NopCommerce tabanlı site — sayfalama: ?pagenumber=N
 """
 
+import re
 import time
 import logging
 from typing import Optional
@@ -22,68 +24,146 @@ def _make_session() -> requests.Session:
     return session
 
 
-def fetch_categories(session: Optional[requests.Session] = None) -> list[dict]:
+def _price(text: str) -> float:
+    if not text:
+        return 0.0
+    clean = re.sub(r"[^\d,\.]", "", text)
+    if "," in clean and "." in clean:
+        if clean.rfind(",") > clean.rfind("."):
+            clean = clean.replace(".", "").replace(",", ".")
+        else:
+            clean = clean.replace(",", "")
+    elif "," in clean:
+        clean = clean.replace(",", ".")
+    try:
+        return round(float(clean), 2)
+    except:
+        return 0.0
+
+
+def _parse_product(card, category: dict) -> Optional[dict]:
+    # Ürün adı
+    name_tag = card.select_one(".product-title a, .product-name a, h2 a, h3 a, .name a")
+    if not name_tag:
+        name_tag = card.select_one(".product-title, .product-name, h2, h3")
+    name = name_tag.get_text(strip=True) if name_tag else ""
+    if not name:
+        return None
+
+    # Fiyatlar — NopCommerce genelde .price-value veya .actual-price kullanır
+    shown_tag   = card.select_one(".price-value, .actual-price, .price .current, .new-price, span.price")
+    regular_tag = card.select_one(".old-price, .non-discounted-price, s.price, .price-old")
+
+    shown_price   = _price(shown_tag.get_text(strip=True)   if shown_tag   else "")
+    regular_price = _price(regular_tag.get_text(strip=True) if regular_tag else "")
+
+    if regular_price == 0:
+        regular_price = shown_price
+
+    discount = 0
+    if regular_price and shown_price and regular_price > shown_price:
+        discount = int(round((regular_price - shown_price) / regular_price * 100))
+
+    # Görsel
+    img_tag = card.select_one("img.product-image, .product-img img, img")
+    image_url = ""
+    if img_tag:
+        image_url = img_tag.get("data-src") or img_tag.get("src") or ""
+        if image_url and not image_url.startswith("http"):
+            image_url = urljoin(config.BASE_URL, image_url)
+
+    # Ürün URL
+    link_tag = card.select_one("a.product-title, h2 a, h3 a, .product-name a, a")
+    product_url = ""
+    if link_tag:
+        href = link_tag.get("href", "")
+        product_url = urljoin(config.BASE_URL, href) if href else ""
+
+    # ID
+    product_id = (
+        card.get("data-productid") or card.get("data-id") or card.get("id") or ""
+    )
+    if not product_id and product_url:
+        product_id = product_url.rstrip("/").split("/")[-1]
+
+    return {
+        "id":            str(product_id),
+        "sku":           str(product_id),
+        "name":          name,
+        "brand":         card.get("data-brand", ""),
+        "category":      category.get("name", ""),
+        "category_id":   category.get("id", ""),
+        "regular_price": regular_price,
+        "shown_price":   shown_price,
+        "discount_rate": discount,
+        "unit":          "",
+        "status":        "OUT_OF_STOCK" if card.select_one(".out-of-stock") else "IN_STOCK",
+        "image_url":     image_url,
+        "product_url":   product_url,
+    }
+
+
+def fetch_products_for_category(
+    category: dict,
+    session: Optional[requests.Session] = None,
+    delay: float = config.REQUEST_DELAY,
+    page_limit: int = 0,
+) -> list[dict]:
+
     if session is None:
         session = _make_session()
 
-    for attempt in range(1, config.MAX_RETRIES + 1):
-        try:
-            resp = session.get(config.BASE_URL, timeout=30)
-            resp.raise_for_status()
+    all_products: list[dict] = []
+    page = 1
+    base_url = category["url"]
+
+    while True:
+        if page_limit and page > page_limit:
             break
-        except requests.RequestException as exc:
-            if attempt == config.MAX_RETRIES:
-                raise RuntimeError(f"Ana sayfa alınamadı: {exc}")
-            time.sleep(config.RETRY_BACKOFF * attempt)
 
-    soup = BeautifulSoup(resp.text, "lxml")
+        url = base_url + ("&" if "?" in base_url else "?") + f"pagenumber={page}"
 
-    # Header menüdeki tüm kategori linklerini topla
-    menu_links = soup.select(".header-menu a, .top-menu a, .mega-menu a")
+        for attempt in range(1, config.MAX_RETRIES + 1):
+            try:
+                resp = session.get(url, timeout=30)
+                resp.raise_for_status()
+                break
+            except requests.RequestException as exc:
+                if attempt == config.MAX_RETRIES:
+                    logger.error("Sayfa alınamadı '%s' sayfa %d: %s", category["name"], page, exc)
+                    return all_products
+                time.sleep(config.RETRY_BACKOFF * attempt)
 
-    seen: set[str] = set()
-    categories = []
+        soup = BeautifulSoup(resp.text, "lxml")
 
-    skip_keywords = {
-        "kampanya", "kampanyalar", "gurme", "ferahevler",
-        "indirim", "katalog", "iletisim", "hakkimizda",
-        "giris", "uye", "sepet", "hesap"
-    }
+        # NopCommerce ürün kartları
+        cards = soup.select(
+            ".product-item, .item-box, article.product-item, "
+            ".product-grid .item, .product-box"
+        )
 
-    for a in menu_links:
-        href = a.get("href", "")
-        name = a.get_text(strip=True)
+        if not cards:
+            logger.debug("Kategori '%s' sayfa %d'de ürün yok — durdu.", category["name"], page)
+            break
 
-        if not href or not name:
-            continue
+        page_products = []
+        for card in cards:
+            record = _parse_product(card, category)
+            if record:
+                page_products.append(record)
 
-        url = urljoin(config.BASE_URL, href)
+        all_products.extend(page_products)
+        logger.debug(
+            "Kategori '%s' — sayfa %d → %d ürün (toplam: %d)",
+            category["name"], page, len(page_products), len(all_products),
+        )
 
-        if not url.startswith(config.BASE_URL):
-            continue
+        # Sonraki sayfa var mı?
+        next_page = soup.select_one("a.next-page, li.next-page a, .pager .next a, a[rel='next']")
+        if not next_page:
+            break
 
-        slug = url.rstrip("/").split("/")[-1].split("?")[0].lower()
+        page += 1
+        time.sleep(delay)
 
-        # Anlamsız linkleri atla
-        if any(k in slug for k in skip_keywords):
-            continue
-        if any(k in name.lower() for k in skip_keywords):
-            continue
-        if url in seen:
-            continue
-
-        seen.add(url)
-        categories.append({
-            "id":            slug or name,
-            "name":          name,
-            "url":           url,
-            "parent_id":     None,
-            "parent_name":   None,
-            "product_count": None,
-        })
-
-    if not categories:
-        raise RuntimeError("Hiçbir kategori bulunamadı.")
-
-    logger.info("Toplam kategori: %d", len(categories))
-    return categories
+    return all_products
