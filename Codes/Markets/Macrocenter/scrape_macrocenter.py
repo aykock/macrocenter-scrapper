@@ -3,6 +3,7 @@ import pandas as pd
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import os
+import subprocess
 
 # ─────────────────────────────────────────
 # CONFIG
@@ -11,9 +12,9 @@ BASE_URL = "https://www.macrocenter.com.tr/rest/products/search"
 PAGE_SIZE = 100
 MAX_WORKERS = 5
 
-data_dir = "data"
-os.makedirs(data_dir, exist_ok=True)  # Klasör yoksa oluştur
-OUTPUT_FILE = f"data/macrocenter_prices_{time.strftime('%Y-%m-%d')}.csv"
+data_dir = "Datas/Markets/Macrocenter"  # Repo yapısına uygun
+os.makedirs(data_dir, exist_ok=True)
+OUTPUT_FILE = f"Datas/Markets/Macrocenter/macrocenter_prices_{time.strftime('%Y-%m-%d')}.csv"
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -23,11 +24,9 @@ HEADERS = {
 
 # ─────────────────────────────────────────
 # KATEGORİ ID → ANA KATEGORİ ADI EŞLEMESİ
-# Her ana kategoriye tıkla, Network'te category-id=XXXXX'i bul, buraya ekle
 # ─────────────────────────────────────────
 CATEGORIES = {
     # category_id : "Ana Kategori Adı"
-    # Örnek (ID'leri kendi değerlerinle değiştir):
     30000000071332 : "Meyve & Sebze",
     30000000071351 : "Süt Ürünleri & Kahvaltılık",
     30000000070965 : "Et & Tavuk & Balık",
@@ -67,7 +66,7 @@ def parse_product(item, category_name):
     shown_price = item.get("shownPrice", 0)
     regular_price = item.get("regularPrice", 0)
     return {
-        "Category": category_name,           # Ana kategori adı (senin verdiğin)
+        "Category": category_name,           # Ana kategori adı
         "Subcategory": item.get("category", {}).get("name", ""),  # Alt kategori ayrı sütunda
         "Name": item.get("name", ""),
         "Brand": item.get("brand", {}).get("name", ""),
@@ -131,5 +130,11 @@ def main():
         print("Hic urun bulunamadi.")
 
 
+def git_push():
+    subprocess.run(["git", "add", "Datas/Markets/Macrocenter/"])
+    subprocess.run(["git", "commit", "-m", f"Macrocenter data {time.strftime('%Y-%m-%d')}"])
+    subprocess.run(["git", "push", "research", "master"])
+
 if __name__ == "__main__":
     main()
+    git_push()
