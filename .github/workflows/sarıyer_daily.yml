@@ -1,4 +1,4 @@
-name: Sariyer - Günlük Fiyat Güncellemesi
+name: Daily Sariyer Scraper
 
 on:
   schedule:
