@@ -1,19 +1,14 @@
-import requests
-from bs4 import BeautifulSoup
-import csv
 import time
+import csv
 import re
-import os
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.options import Options
 from datetime import datetime
 
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Safari/537.36"
-    )
-}
-
+# -------------------------------------------------------------------
+# KATEGORİLER
+# -------------------------------------------------------------------
 KATEGORILER = [
     ("Meyve ve Sebze",          "https://www.gurmar.com.tr/meyve-ve-sebze-c"),
     ("Et ve Tavuk",             "https://www.gurmar.com.tr/et-ve-tavuk-urunleri-c"),
@@ -30,113 +25,110 @@ KATEGORILER = [
 ]
 
 
-def fiyat_temizle(metin):
-    return metin.replace("₺", "").strip()
-
-
-def kategori_cek(base_url, kategori_adi):
-    tum_urunler = []
-    gorulmus_href = set()
-    beklenen = 0
-    sayfa = 1
-
-    while True:
-        url = f"{base_url}?page={sayfa}"
-        try:
-            r = requests.get(url, headers=HEADERS, timeout=15)
-            r.raise_for_status()
-        except requests.RequestException as e:
-            print(f"  ❌ Hata ({url}): {e}")
-            break
-
-        soup = BeautifulSoup(r.text, "html.parser")
-
-        if sayfa == 1:
-            sayi_tag = soup.find(string=re.compile(r"ürün listeleniyor", re.IGNORECASE))
-            if sayi_tag:
-                m = re.search(r"(\d+)", sayi_tag)
-                if m:
-                    beklenen = int(m.group(1))
-                    print(f"  📦 Beklenen: {beklenen}")
-
-        tum_linkler = soup.find_all("a", href=re.compile(r"^/[\w\-]+-\d+-p$"))
-        urun_linkleri = [a for a in tum_linkler if a.find("h4")]
-
-        yeni_linkler = []
-        for a in urun_linkleri:
-            href = a.get("href")
-            if href not in gorulmus_href:
-                gorulmus_href.add(href)
-                yeni_linkler.append(a)
-
-        if not yeni_linkler:
-            break
-
-        for a in yeni_linkler:
-            h4 = a.find("h4")
-            isim = h4.get_text(strip=True) if h4 else a.get_text(strip=True)
-            if not isim:
-                continue
-
-            kart = a.parent
-            fiyat_guncel, fiyat_eski = "", ""
-            fiyatlar = [t.strip() for t in kart.stripped_strings if "₺" in t]
-
-            if len(fiyatlar) == 1:
-                fiyat_guncel = fiyat_temizle(fiyatlar[0])
-            elif len(fiyatlar) >= 2:
-                fiyat_guncel = fiyat_temizle(fiyatlar[0])
-                fiyat_eski   = fiyat_temizle(fiyatlar[1])
-
-            tum_urunler.append({
-                "tarih":         datetime.now().strftime("%Y-%m-%d"),
-                "kategori":      kategori_adi,
-                "product_name":  isim,
-                "product_price": fiyat_guncel,
-                "eski_fiyat":    fiyat_eski,
-                "url":           "https://www.gurmar.com.tr" + a["href"],
-            })
-
-        print(f"  📄 Sayfa {sayfa}: {len(yeni_linkler)} ürün (toplam: {len(tum_urunler)})")
-
-        if len(urun_linkleri) < 25:
-            break
-
-        sayfa += 1
-        time.sleep(0.5)
-
-    cekilen = len(tum_urunler)
-    if beklenen and cekilen == beklenen:
-        print(f"  ✅ Başarılı! {cekilen} ürün")
-    elif beklenen:
-        print(f"  ⚠️  Uyuşmazlık! Beklenen: {beklenen} | Çekilen: {cekilen}")
-
-    return tum_urunler
+def fiyat_cek(kart, driver):
+    """
+    span.product-price içindeki fiyatı çeker.
+    İçinde kilogram-price div'i de olduğundan, sadece ilk text node'unu alıyoruz.
+    Örnek HTML: <span class="product-price">₺62,45<div class="kilogram-price">...</div></span>
+    """
+    try:
+        fiyat_span = kart.find_element(By.CSS_SELECTOR, "span.product-price")
+        # JavaScript ile sadece ilk text node'unu al (kg fiyatını hariç tut)
+        ham_fiyat = driver.execute_script(
+            "return arguments[0].childNodes[0].textContent;", fiyat_span
+        )
+        return ham_fiyat.replace("₺", "").strip()
+    except Exception:
+        return ""
 
 
 def main():
+    chrome_options = Options()
+    chrome_options.add_argument("--headless=new")  # Ekransız mod
+    chrome_options.add_argument("--no-sandbox")  # CI/CD için gerekli
+    chrome_options.add_argument("--disable-dev-shm-usage")  # Bellek sınırlarına takılmamak için
+
+    driver = webdriver.Chrome(options=chrome_options)
     tum_urunler = []
 
-    for kategori_adi, url in KATEGORILER:
+    for kategori_adi, link in KATEGORILER:
         print(f"\n🔍 İşleniyor: {kategori_adi}")
-        urunler = kategori_cek(url, kategori_adi)
-        tum_urunler.extend(urunler)
-        time.sleep(1)
+        driver.get(link)
+        time.sleep(3)
 
-    # Datas/Markets/Gurmar klasörüne kaydet
-    bugun = datetime.now().strftime("%Y-%m-%d")
-    REPO_KOKU = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    klasor = os.path.join(REPO_KOKU, "Datas", "Markets", "Gurmar")
-    os.makedirs(klasor, exist_ok=True)
-    csv_dosyasi = os.path.join(klasor, f"gurmar_{bugun}.csv")
+        # ── Beklenen ürün sayısını çek ──────────────────────────────
+        try:
+            sayi_metni = driver.find_element(
+                By.XPATH, "//*[contains(text(), 'ürün listeleniyor')]"
+            ).text
+            beklenen_sayi = int(re.search(r"\d+", sayi_metni).group())
+            print(f"  📦 Beklenen ürün sayısı: {beklenen_sayi}")
+        except Exception:
+            beklenen_sayi = -1
 
-    with open(csv_dosyasi, "w", newline="", encoding="utf-8-sig") as f:
-        fieldnames = ["tarih", "kategori", "product_name", "product_price", "eski_fiyat", "url"]
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        # ── Infinite scroll: sayfa sonuna kadar kaydır ─────────────
+        last_height = driver.execute_script("return document.body.scrollHeight")
+        while True:
+            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+            time.sleep(2)
+            new_height = driver.execute_script("return document.body.scrollHeight")
+            if new_height == last_height:
+                break
+            last_height = new_height
+
+        time.sleep(3)  # Son yükleme için ekstra bekleme
+
+        # ── Ürün kartlarını bul ─────────────────────────────────────
+        # Gerçek HTML'e göre: div.product-vertical
+        urun_kartlari = driver.find_elements(By.CSS_SELECTOR, "div.product-vertical")
+        cekilen_urun_sayisi = 0
+
+        for kart in urun_kartlari:
+            try:
+                # İsim: h4.product-title > span
+                # Gerçek HTML: <h4 class="product-title"><span aria-describedby=":rp:">Armut...</span></h4>
+                isim = kart.find_element(
+                    By.CSS_SELECTOR, "h4.product-title span"
+                ).text
+
+                if not isim:
+                    continue
+
+                # Fiyat: span.product-price'ın sadece ilk text node'u
+                fiyat = fiyat_cek(kart, driver)
+
+                tum_urunler.append({
+                    "kategori":      kategori_adi,
+                    "product_name":  isim,
+                    "product_price": fiyat,
+                })
+                cekilen_urun_sayisi += 1
+
+            except Exception:
+                continue
+
+        # ── Sayı kontrolü ───────────────────────────────────────────
+        if beklenen_sayi != -1:
+            if cekilen_urun_sayisi == beklenen_sayi:
+                print(f"  ✅ Başarılı! Beklenen: {beklenen_sayi} | Çekilen: {cekilen_urun_sayisi}")
+            else:
+                print(f"  ⚠️  Uyuşmazlık! Beklenen: {beklenen_sayi} | Çekilen: {cekilen_urun_sayisi}")
+        else:
+            print(f"  ✅ Çekilen ürün sayısı: {cekilen_urun_sayisi}")
+
+    driver.quit()
+
+    # ── CSV'ye kaydet ────────────────────────────────────────────────
+    bugunun_tarihi = datetime.now().strftime("%Y-%m-%d")
+    csv_dosyasi = f"Datas/Markets/Gurmar/gurmar_prices_{bugunun_tarihi}.csv"
+
+    with open(csv_dosyasi, "w", newline="", encoding="utf-8-sig") as file:
+        fieldnames = ["kategori", "product_name", "product_price"]
+        writer = csv.DictWriter(file, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(tum_urunler)
 
-    print(f"\n🎉 Tamamlandı! Toplam {len(tum_urunler)} ürün → '{csv_dosyasi}'")
+    print(f"\n🎉 İşlem tamam! Toplam {len(tum_urunler)} ürün '{csv_dosyasi}' dosyasına kaydedildi.")
 
 
 if __name__ == "__main__":
