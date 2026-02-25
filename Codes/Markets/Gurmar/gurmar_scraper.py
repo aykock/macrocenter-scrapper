@@ -47,6 +47,7 @@ def main():
     chrome_options.add_argument("--headless=new")  # Ekransız mod
     chrome_options.add_argument("--no-sandbox")  # CI/CD için gerekli
     chrome_options.add_argument("--disable-dev-shm-usage")  # Bellek sınırlarına takılmamak için
+    chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
     driver = webdriver.Chrome(options=chrome_options)
     tum_urunler = []
@@ -66,17 +67,19 @@ def main():
         except Exception:
             beklenen_sayi = -1
 
-        # ── Infinite scroll: sayfa sonuna kadar kaydır ─────────────
+        # ── Infinite scroll: Maksimum 50 kaydırma limiti ekleyelim ──
         last_height = driver.execute_script("return document.body.scrollHeight")
-        while True:
+        scroll_count = 0
+        while scroll_count < 50: # Bir kategoride max 50 kez aşağı kaydır (Yeterli olacaktır)
             driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            time.sleep(2)
+            time.sleep(2) # 2 saniyeyi 1.5'e çekebilirsin
             new_height = driver.execute_script("return document.body.scrollHeight")
             if new_height == last_height:
                 break
             last_height = new_height
+            scroll_count += 1
 
-        time.sleep(3)  # Son yükleme için ekstra bekleme
+        time.sleep(2)  # Son yükleme için ekstra bekleme
 
         # ── Ürün kartlarını bul ─────────────────────────────────────
         # Gerçek HTML'e göre: div.product-vertical
