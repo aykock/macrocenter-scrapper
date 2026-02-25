@@ -26,13 +26,13 @@ jobs:
         run: pip install requests beautifulsoup4 lxml pandas tqdm
 
       - name: Scraper çalıştır
-        run: python Codes/Markets/Sarıyer/main.py --output both --delay 1.0
+        run: python Codes/Markets/Sariyer/main.py --output both --delay 1.0
 
       - name: Commit & Push
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Datas/Markets/Sarıyer/
+          git add Datas/Markets/Sariyer/
           git diff --cached --quiet && exit 0
           git commit -m "📦 Sariyer fiyat güncellemesi: $(date +%Y-%m-%d)"
           git push
