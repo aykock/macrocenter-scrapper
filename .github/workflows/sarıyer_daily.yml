@@ -1,15 +1,14 @@
 name: Daily Sariyer Scraper
 
-on:
+"on":
   schedule:
-    - cron: "0 3 * * *"  # Her gün 06:00 İstanbul saati
-  workflow_dispatch:       # Elle de çalıştırılabilir
+    - cron: "0 3 * * *"
+  workflow_dispatch:
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
     timeout-minutes: 120
-
     permissions:
       contents: write
 
@@ -24,7 +23,7 @@ jobs:
           cache: pip
 
       - name: Bağımlılıkları yükle
-        run: pip install -r requirements.txt
+        run: pip install requests beautifulsoup4 lxml pandas tqdm
 
       - name: Scraper çalıştır
         run: python Codes/Markets/Sariyer/main.py --output both --delay 1.0
