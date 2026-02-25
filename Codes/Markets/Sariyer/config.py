@@ -4,22 +4,19 @@ Configuration — Sarıyer Market scraper
 
 BASE_URL = "https://www.sariyermarket.com"
 
-# Gerçek endpoint'ler (DevTools ile doğrulandı)
 PRODUCT_LIST_URL = f"{BASE_URL}/Catalog/OBAjaxFilterProducts"
 CATEGORY_API_URL = f"{BASE_URL}/OBComponents/GetHomePageCategories"
 
 DEFAULT_HEADERS = {
-    "Accept":          "application/json, text/javascript, */*; q=0.01",
+    "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "tr-TR,tr;q=0.9",
-    "Content-Type":    "application/x-www-form-urlencoded; charset=UTF-8",
     "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/122.0.0.0 Safari/537.36"
     ),
-    "X-Requested-With": "XMLHttpRequest",
-    "Referer":          BASE_URL + "/",
-    "Origin":           BASE_URL,
+    "Referer":  BASE_URL + "/",
+    "Origin":   BASE_URL,
 }
 
 REQUEST_DELAY  = 0.7
