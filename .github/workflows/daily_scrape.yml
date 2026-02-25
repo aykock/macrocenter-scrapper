@@ -7,34 +7,38 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
+  scrape_and_upload:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v3
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.9'
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+          cache: 'pip'
 
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        # Path updated to point to your specific requirements file
-        pip install -r Codes/Markets/Baskent/requirements.txt
 
-    - name: Run scraper
-      run: |
-        # Path updated to point to your specific scraper script
-        python Codes/Markets/Baskent/baskent.py
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # Path updated to point to your specific requirements file
+          pip install -r Codes/Markets/Baskent/requirements.txt
 
-    - name: Commit and Push changes
-      run: |
-        git config --global user.name "GitHub Action"
-        git config --global user.email "action@github.com"
-        # Track the CSV files in your specific data directory
-        git add Datas/Markets/Baskent/*.csv
-        git commit -m "Auto-update: Added daily product data for $(date +'%Y-%m-%d')" || exit 0
-        git push
+      - name: Run scraper
+        run: |
+          # Path updated to point to your specific scraper script
+          python Codes/Markets/Baskent/baskent.py
+
+      - name: Commit and Push changes
+        run: |
+          git config --global user.name "GitHub Action"
+          git config --global user.email "action@github.com"
+          # Track the CSV files in your specific data directory
+          git add Datas/Markets/Baskent/*.csv
+          git commit -m "Auto-update: Added daily product data for $(date +'%Y-%m-%d')" || exit 0
+            git push origin HEAD:${{ github.ref }}
