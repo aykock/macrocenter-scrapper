@@ -1,14 +1,16 @@
 """
 Category fetcher — Sarıyer Market
-===================================
-GET /OBComponents/GetHomePageCategories → JSON kategori listesi döner.
+Ana sayfanın header menüsünden slug tabanlı kategori URL'leri çeker.
 """
 
 import time
 import logging
 from typing import Optional
+from urllib.parse import urljoin
 
 import requests
+from bs4 import BeautifulSoup
+
 import config
 
 logger = logging.getLogger(__name__)
@@ -26,51 +28,59 @@ def fetch_categories(session: Optional[requests.Session] = None) -> list[dict]:
 
     for attempt in range(1, config.MAX_RETRIES + 1):
         try:
-            resp = session.get(config.CATEGORY_API_URL, timeout=20)
+            resp = session.get(config.BASE_URL, timeout=30)
             resp.raise_for_status()
-            data = resp.json()
             break
         except requests.RequestException as exc:
             if attempt == config.MAX_RETRIES:
-                raise RuntimeError(f"Kategori listesi alınamadı: {exc}")
+                raise RuntimeError(f"Ana sayfa alınamadı: {exc}")
             time.sleep(config.RETRY_BACKOFF * attempt)
 
-    if isinstance(data, list):
-        raw_list = data
-    elif isinstance(data, dict):
-        raw_list = (
-            data.get("categories")
-            or data.get("data")
-            or data.get("items")
-            or []
-        )
-    else:
-        raise RuntimeError(f"Beklenmeyen kategori yanıtı: {type(data)}")
+    soup = BeautifulSoup(resp.text, "lxml")
 
-    categories = []
+    # Header menüdeki tüm kategori linklerini topla
+    menu_links = soup.select(".header-menu a, .top-menu a, .mega-menu a")
+
     seen: set[str] = set()
+    categories = []
 
-    def _parse(nodes, parent_id=None, parent_name=None):
-        for node in nodes:
-            if not isinstance(node, dict):
-                continue
-            cid  = str(node.get("Id") or node.get("id") or "")
-            name = node.get("Name") or node.get("name") or cid
-            if cid and cid not in seen:
-                seen.add(cid)
-                categories.append({
-                    "id":            cid,
-                    "name":          name,
-                    "url":           f"{config.BASE_URL}/search?cid={cid}&adv=True&isc=True&sid=True",
-                    "parent_id":     parent_id,
-                    "parent_name":   parent_name,
-                    "product_count": node.get("ProductCount") or node.get("productCount"),
-                })
-            children = node.get("SubCategories") or node.get("children") or []
-            if children:
-                _parse(children, cid, name)
+    skip_keywords = {
+        "kampanya", "kampanyalar", "gurme", "ferahevler",
+        "indirim", "katalog", "iletisim", "hakkimizda",
+        "giris", "uye", "sepet", "hesap"
+    }
 
-    _parse(raw_list)
+    for a in menu_links:
+        href = a.get("href", "")
+        name = a.get_text(strip=True)
+
+        if not href or not name:
+            continue
+
+        url = urljoin(config.BASE_URL, href)
+
+        if not url.startswith(config.BASE_URL):
+            continue
+
+        slug = url.rstrip("/").split("/")[-1].split("?")[0].lower()
+
+        # Anlamsız linkleri atla
+        if any(k in slug for k in skip_keywords):
+            continue
+        if any(k in name.lower() for k in skip_keywords):
+            continue
+        if url in seen:
+            continue
+
+        seen.add(url)
+        categories.append({
+            "id":            slug or name,
+            "name":          name,
+            "url":           url,
+            "parent_id":     None,
+            "parent_name":   None,
+            "product_count": None,
+        })
 
     if not categories:
         raise RuntimeError("Hiçbir kategori bulunamadı.")
