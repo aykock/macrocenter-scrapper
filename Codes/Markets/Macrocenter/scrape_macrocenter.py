@@ -131,6 +131,7 @@ def main():
 
 
 def git_push():
+    subprocess.run(["git", "pull", "research", "master", "--no-rebase"])
     subprocess.run(["git", "add", "Datas/Markets/Macrocenter/"])
     subprocess.run(["git", "commit", "-m", f"Macrocenter data {time.strftime('%Y-%m-%d')}"])
     subprocess.run(["git", "push", "research", "master"])
