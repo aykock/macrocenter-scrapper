@@ -73,7 +73,7 @@ def _append_products(new_products: list[dict], output_format: str) -> None:
 
     os.makedirs(config.OUTPUT_DIR, exist_ok=True)
     df_new = pd.DataFrame(new_products)
-
+    df_new = df_new[["name", "shown_price"]]
     if output_format in ("csv", "both"):
         write_header = not os.path.exists(config.CSV_OUTPUT_FILE)
         df_new.to_csv(
