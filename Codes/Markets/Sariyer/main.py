@@ -103,7 +103,7 @@ def _dedup_csv() -> int:
         return 0
     df = pd.read_csv(config.CSV_OUTPUT_FILE, encoding="utf-8-sig")
     before = len(df)
-    df.drop_duplicates(subset=["id"], keep="first", inplace=True)
+    df.drop_duplicates(subset=["name"], keep="first", inplace=True)
     df.reset_index(drop=True, inplace=True)
     df.to_csv(config.CSV_OUTPUT_FILE, index=False, encoding="utf-8-sig")
     removed = before - len(df)
@@ -121,7 +121,7 @@ def _dedup_json() -> None:
     seen: set[str] = set()
     deduped = [
         item for item in data
-        if (pid := str(item.get("id", ""))) not in seen and not seen.add(pid)
+        if (pid := str(item.get("name", ""))) not in seen and not seen.add(pid)
     ]
     with open(config.JSON_OUTPUT_FILE, "w", encoding="utf-8") as f:
         json.dump(deduped, f, ensure_ascii=False, indent=2)
